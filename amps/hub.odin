@@ -31,6 +31,53 @@ Subscription :: struct {
     active:  bool,
 }
 
+filter_match :: proc(filter: string, msg: Message) -> bool {
+    if strings.has_prefix(filter, "topic = ") {
+        topic := filter[len("topic = "):]
+        if strings.has_prefix(topic, "\"") && strings.has_suffix(topic, "\"") {
+            topic = topic[1:len(topic)-1]
+        }
+        return msg.topic == topic
+    }
+    if strings.has_prefix(filter, "topic != ") {
+        topic := filter[len("topic != "):]
+        if strings.has_prefix(topic, "\"") && strings.has_suffix(topic, "\"") {
+            topic = topic[1:len(topic)-1]
+        }
+        return msg.topic != topic
+    }
+    
+    parts, _ := strings.split(filter, " = ", context.allocator)
+    if len(parts) == 2 {
+        field := strings.trim(parts[0], " ")
+        if field == "topic" {
+            val := strings.trim(parts[1], " ")
+            if strings.has_prefix(val, "\"") && strings.has_suffix(val, "\"") {
+                val = val[1:len(val)-1]
+            }
+            return msg.topic == val
+        }
+    }
+    
+    parts2, _ := strings.split(filter, " != ", context.allocator)
+    if len(parts2) == 2 {
+        field := strings.trim(parts2[0], " ")
+        if field == "topic" {
+            val := strings.trim(parts2[1], " ")
+            if strings.has_prefix(val, "\"") && strings.has_suffix(val, "\"") {
+                val = val[1:len(val)-1]
+            }
+            return msg.topic != val
+        }
+    }
+    
+    if filter != "" {
+        msg_str := string(msg.body)
+        return strings.contains(msg_str, filter)
+    }
+    return true
+}
+
 Subscriber_ID :: u32
 
 Hub :: struct {
@@ -43,6 +90,10 @@ Hub :: struct {
     drop_count:  u64,
     input_ch:    chan.Chan(Message),
     running:     bool,
+    replay:      [dynamic]Message,
+    replay_lock: sync.Mutex,
+    replay_max:  int,
+    filter_drop: u64,
 }
 
 topic_matcher :: proc(t, p: string) -> bool {
@@ -75,6 +126,8 @@ hub_init :: proc(allocator := context.allocator) -> (h: Hub) {
     c, _ := chan.create(chan.Chan(Message), 65536, allocator)
     h.input_ch = c
     h.running = true
+    h.replay = make([dynamic]Message, 0, 1024)
+    h.replay_max = 1000
     return
 }
 
@@ -92,6 +145,7 @@ hub_destroy :: proc(h: ^Hub, allocator := context.allocator) {
     }
     for k, _ in h.topic_index { delete_key(&h.topic_index, k) }
     for k, _ in h.wc_index { delete_key(&h.wc_index, k) }
+    clear(&h.replay)
 }
 
 publish :: proc(h: ^Hub, msg: Message) -> bool {
@@ -108,10 +162,10 @@ subscribe :: proc(
     buf_size: int,
     allocator := context.allocator,
 ) -> (chan.Chan(Message), u32) {
-    if !h.running do return nil, 0
+    if !h.running do return chan.Chan(Message){}, 0
 
     c, err := chan.create(chan.Chan(Message), buf_size, allocator)
-    if err != .None do return nil, 0
+    if err != .None do return chan.Chan(Message){}, 0
 
     sub := new(Subscription)
     sub.id = h.next_id
@@ -121,9 +175,10 @@ subscribe :: proc(
     sub.active = true
 
     sync.mutex_lock(&h.mu)
-    defer sync.mutex_unlock(&h.mu)
-    if len(h.subs) >= MAX_SUBSCRIBERS do return nil, 0
-
+    if len(h.subs) >= MAX_SUBSCRIBERS {
+        sync.mutex_unlock(&h.mu)
+        return chan.Chan(Message){}, 0
+    }
     h.subs[sub.id] = sub
 
     if strings.contains(topic, TOPIC_WILDCARD) {
@@ -137,8 +192,25 @@ subscribe :: proc(
         append(&elist, sub.id)
         h.topic_index[topic] = elist
     }
+    
+    sub_id := sub.id
     h.next_id += 1
-    return c, sub.id
+    sync.mutex_unlock(&h.mu)
+    
+    // Replay recent messages to new subscriber
+    if len(h.replay) > 0 {
+        sync.mutex_lock(&h.replay_lock)
+        count := len(h.replay)
+        if count > 100 { count = 100 }
+        for i := len(h.replay) - count; i < len(h.replay); i += 1 {
+            if i >= 0 && i < len(h.replay) {
+                _ = chan.try_send(c, h.replay[i])
+            }
+        }
+        sync.mutex_unlock(&h.replay_lock)
+    }
+    
+    return c, sub_id
 }
 
 unsubscribe :: proc(h: ^Hub, id: u32) {
@@ -175,6 +247,20 @@ dispatch_loop :: proc(h: ^Hub) {
         msg, ok := chan.recv(h.input_ch)
         if !ok || !h.running do break
 
+        // Add to replay buffer
+        sync.mutex_lock(&h.replay_lock)
+        if len(h.replay) >= h.replay_max {
+            // Remove oldest by rebuilding without first element
+            old := h.replay
+            h.replay = make([dynamic]Message, 0, cap(old))
+            for i := 1; i < len(old); i += 1 {
+                append(&h.replay, old[i])
+            }
+            delete(old)
+        }
+        append(&h.replay, msg)
+        sync.mutex_unlock(&h.replay_lock)
+
         sync.mutex_lock(&h.mu)
         defer sync.mutex_unlock(&h.mu)
 
@@ -198,9 +284,11 @@ dispatch_loop :: proc(h: ^Hub) {
             sub_ptr, found := h.subs[id]
             if !found || sub_ptr == nil || !sub_ptr.active do continue
 
-            // Filter check (Sprint 2 placeholder)
             if sub_ptr.filter != "" {
-                if false do continue  // TODO: filter_match(sub_ptr.filter, msg)
+                if !filter_match(sub_ptr.filter, msg) {
+                    h.filter_drop += 1
+                    continue
+                }
             }
 
             ok := chan.try_send(sub_ptr.ch, msg)
@@ -215,10 +303,10 @@ start_dispatch :: proc(h: ^Hub) {
     })
 }
 
-stats :: proc(h: ^Hub) -> (msgs, drops: u64) {
+stats :: proc(h: ^Hub) -> (msgs, drops, fdrops: u64) {
     sync.mutex_lock(&h.mu)
     defer sync.mutex_unlock(&h.mu)
-    return h.msg_count, h.drop_count
+    return h.msg_count, h.drop_count, h.filter_drop
 }
 
 serve_tcp :: proc(h: ^Hub, port: int) {

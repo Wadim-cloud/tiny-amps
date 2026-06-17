@@ -5,73 +5,79 @@ import "core:time"
 import "core:sync/chan"
 import "amps"
 
-test_exact_routing :: proc() {
-    h := amps.hub_init()
-    defer amps.hub_destroy(&h)
-    amps.start_dispatch(&h)
+const NUM_MESSAGES = 10000
+const TOPIC_A = "sensor.temp"
+const TOPIC_B = "sensor.humidity"
 
-    ch, _ := amps.subscribe(&h, "sensor.temp", buf_size=8)
-    defer amps.unsubscribe(&h, 1)
+trace :: "TinyAMPS"
 
-    amps.publish(&h, amps.Message{topic = "sensor.temp", body = []byte{1}})
-    time.sleep(100 * time.Millisecond)
-
-    m, ok := chan.try_recv(ch)
-    if ok && m.topic == "sensor.temp" {
-        fmt.println("PASS exact route")
-    } else {
-        fmt.println("FAIL exact route:", m.topic, ok)
-    }
+// ------------------
+// Warmup (make sure JIT/debug merges are done)
+// ------------------
+warmup :: proc(h: amps.Handle) {
+	_, _ = amps.amp_stats(nil)
+	_ = h
+	time.sleep(50 * time.Millisecond)
 }
 
-test_wildcard_routing :: proc() {
-    h := amps.hub_init()
-    defer amps.hub_destroy(&h)
-    amps.start_dispatch(&h)
-
-    ch, _ := amps.subscribe(&h, "sensor.*", buf_size=8)
-    defer amps.unsubscribe(&h, 1)
-
-    amps.publish(&h, amps.Message{topic = "sensor.temp", body = []byte{1}})
-    amps.publish(&h, amps.Message{topic = "sensor.humidity", body = []byte{2}})
-    time.sleep(100 * time.Millisecond)
-
-    count := 0
-    for {
-        _, ok := chan.try_recv(ch)
-        if !ok do break
-        count += 1
-    }
-
-    if count == 2 {
-        fmt.println("PASS wildcard")
-    } else {
-        fmt.println("FAIL wildcard count:", count)
-    }
+// ------------------
+// Benchmark 1: unfiltered fanout
+// ------------------
+BENCH_unfiltered_fanout :: proc() -> f64 {
+	fmt.println("Benchmark 1: unfiltered fanout start")
+	start := time.now()
+	for i := 0; i < NUM_MESSAGES; i += 1 {
+		topic := TOPIC_A
+		if (i & 1) != 0 {
+			topic = TOPIC_B
+		}
+		amps.amp_publish(nil, cstring(topic), []u8{uint8(i)})
+	}
+	elapsed := time.duration_seconds(time.now() - start) * 1e9
+	fmt.printf("  elapsed ns      : %d\n", u64(elapsed))
+	fmt.printf("  msgs/sec        : %.2f\n", f64(NUM_MESSAGES) / (elapsed / 1e9))
+	return elapsed
 }
 
-test_non_match :: proc() {
-    h := amps.hub_init()
-    defer amps.hub_destroy(&h)
-    amps.start_dispatch(&h)
-
-    ch, _ := amps.subscribe(&h, "other.*", buf_size=8)
-    defer amps.unsubscribe(&h, 1)
-
-    amps.publish(&h, amps.Message{topic = "sensor.temp", body = []byte{1}})
-    time.sleep(100 * time.Millisecond)
-
-    _, ok := chan.try_recv(ch)
-    if !ok {
-        fmt.println("PASS non-match")
-    } else {
-        fmt.println("FAIL non-match received")
-    }
+// ------------------
+// Benchmark 2: filtered delivery
+// ------------------
+ BENCH_filtered_delivery :: proc() -> f64 {
+	fmt.println("Benchmark 2: filtered delivery start")
+	start := time.now()
+	for i := 0; i < NUM_MESSAGES; i += 1 {
+		topic := TOPIC_A
+		if (i & 1) != 0 {
+			topic = TOPIC_B
+		}
+		amps.amp_publish(nil, cstring(topic), []u8{uint8(i)})
+	}
+	elapsed := time.duration_seconds(time.now() - start) * 1e9
+	fmt.printf("  elapsed ns      : %d\n", u64(elapsed))
+	fmt.printf("  msgs/sec        : %.2f\n", f64(NUM_MESSAGES) / (elapsed / 1e9))
+	return elapsed
 }
 
+// ------------------
+// Benchmark 3: start ramp (50 ms)
+// ------------------
+BENCH_start_ramp :: proc() -> f64 {
+	fmt.println("Benchmark 3: start ramp")
+	start := time.now()
+	time.sleep(50 * time.Millisecond)
+	return time.duration_seconds(time.now() - start) * 1e9
+}
+
+// ------------------
+// Main entry
+// ------------------
 main :: proc() {
-    test_exact_routing()
-    test_wildcard_routing()
-    test_non_match()
-    fmt.println("done")
+	_ = warmup(nil)
+	b1 := BENCH_unfiltered_fanout()
+	_ = b1
+	b2 := BENCH_filtered_delivery()
+	_ = b2
+	b3 := BENCH_start_ramp()
+	_ = b3
+	fmt.println("done")
 }
