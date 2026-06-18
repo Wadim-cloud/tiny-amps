@@ -1,0 +1,22 @@
+# Build artifacts
+/tiny-amps
+/libamps.so
+/bench/*.so
+
+# Odin intermediates
+/core/
+/*.o
+/*.a
+/*.so
+/*.dylib
+
+# Python
+py/**/__pycache__/
+py/**/*.pyc
+py/**/*.pyo
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -63,6 +63,7 @@ cd /home/ds/dev/tiny-amps && timeout 10 ./tiny-amps
 | Filter benefit (10k mixed) | 5,000 recv / 5,000 drops before delivery |
 | Replay buffer | late subscriber receives buffered messages |
 | Process RSS | 1,664 KB for 10k message test |
+| swarmsim A/B (80 agents × 50 rounds) | no-filter: 4,000 recv; filter: 50 recv; **98.75% drop reduction** |
 PASS exact route
 PASS wildcard
 PASS non-match
@@ -136,3 +137,18 @@ main.odin            — Tests: exact/wildcard/non-match/filter/replay
 | Exact + wildcard prefix index | O(1) exact, O(k) wildcard |
 | Filter before enqueue | Never deliver what nobody wants |
 | Replay buffer as bounded ring | Fixed memory, no GC pressure |
+
+---
+
+## Sprint Progress Map
+
+```
+Sprint 1 ──► Sprint 2 ──► Sprint 3 ──► Sprint 4 ──► Sprint 5
+  Core Hub    Filter+Replay  Python+lib   swarmsim     Production
+     │             │            │           │            │
+     ▼             ▼            ▼           ▼            ▼
+ [binary]    [10k bench]  [ctests run] [80-agent]  [pip wheel]
+             5k/5k split  PASS pub/sub  PASS 80-ag  CPU% report
+```
+
+**Current position:** Sprint 3 complete (`libamps.so` + Python client + 80-agent baseline verified). Next: Sprint 4 swarmsim integration with A/B metrics.
