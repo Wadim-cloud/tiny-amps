@@ -1,0 +1,8 @@
+README.md
+setup.py
+py/amps/__init__.py
+py/tiny_amps.egg-info/PKG-INFO
+py/tiny_amps.egg-info/SOURCES.txt
+py/tiny_amps.egg-info/dependency_links.txt
+py/tiny_amps.egg-info/requires.txt
+py/tiny_amps.egg-info/top_level.txt
