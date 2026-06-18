@@ -3,6 +3,9 @@ package main
 import "core:fmt"
 import "core:time"
 import "core:sync/chan"
+import "core:os"
+import "core:mem"
+import "core:strings"
 import "amps"
 
 NUM_MESSAGES :: 10000
@@ -164,6 +167,66 @@ test_10k_roundtrip :: proc() {
 	}
 }
 
+rss_bytes :: proc() -> u64 {
+	data, err := os.read_entire_file("/proc/self/status", context.allocator)
+	if err != nil || len(data) == 0 do return 0
+
+	text := string(data)
+	lines := strings.split(text, "\n")
+	for line in lines {
+		if strings.has_prefix(line, "VmRSS:") {
+			i := 0
+			for i < len(line) {
+				c := line[i]
+				if c >= '0' && c <= '9' {
+					num := 0
+					for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+						num = num * 10 + int(line[i] - '0')
+						i += 1
+					}
+					return u64(num) * 1024
+				}
+				i += 1
+			}
+		}
+	}
+	return 0
+}
+
+test_perf :: proc() {
+	hub := amps.hub_init()
+	defer amps.hub_destroy(&hub)
+	amps.start_dispatch(&hub)
+
+	ch, _ := amps.subscribe(&hub, "sensor.*", filter="", buf_size=10000)
+	defer amps.unsubscribe(&hub, 1)
+
+	before := rss_bytes()
+	N := 10000
+	total := 0
+	for i := 0; i < N; i += 1 {
+		topic := "sensor.temp"
+		if (i & 1) != 0 {
+			topic = "sensor.humidity"
+		}
+		body := []byte{u8(i), u8(i >> 8)}
+		ok := amps.publish(&hub, amps.Message{topic = topic, body = body})
+		if ok do total += 1
+	}
+	received := 0
+	for received < total {
+		_, ok := chan.try_recv(ch)
+		if ok do received += 1
+	}
+	after := rss_bytes()
+
+	if received == total && total == N {
+		fmt.printf("PASS perf: %d msgs, RSS %d KB\n", total, (after - before) / 1024)
+	} else {
+		fmt.println("FAIL perf incomplete:", received, total)
+	}
+}
+
 main :: proc() {
 	test_exact_routing()
 	test_wildcard_routing()
@@ -171,5 +234,6 @@ main :: proc() {
 	test_filter_routing()
 	test_replay_buffer()
 	test_10k_roundtrip()
+	test_perf()
 	fmt.println("done")
 }

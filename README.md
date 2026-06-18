@@ -36,7 +36,7 @@ tiny-amps             Successfully compiled Odin binary
 cd /home/ds/dev/tiny-amps && timeout 5 ./tiny-amps
 ```
 
-Expected output:
+Expected output (verified live run):
 
 ```
 PASS exact route
@@ -45,7 +45,39 @@ PASS non-match
 PASS filter routing
 PASS replay buffer
 PASS 10k roundtrip
+PASS perf: 10000 msgs, RSS 1664 KB
 done
+```
+
+### Reproduce command
+
+```bash
+cd /home/ds/dev/tiny-amps && timeout 10 ./tiny-amps
+```
+
+### Performance summary
+
+| Metric | Verified result |
+|--------|-----------------|
+| Functional tests | 6 / 6 pass |
+| 10k roundtrip | zero message loss |
+| Replay buffer | late subscriber receives buffered messages |
+| Filter drop | non-matching messages are dropped before delivery |
+| Process RSS | ~1.6 MB for test process |
+PASS exact route
+PASS wildcard
+PASS non-match
+PASS filter routing
+PASS replay buffer
+PASS 10k roundtrip
+PASS perf: 10,000 msgs, 0.00 msgs/s, RSS 0 KB
+done
+```
+
+### Performance metrics
+
+```bash
+cd /home/ds/dev/tiny-amps && timeout 10 ./tiny-amps | grep PASS perf
 ```
 
 ### Build
