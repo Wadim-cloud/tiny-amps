@@ -132,11 +132,44 @@ test_replay_buffer :: proc() {
 	}
 }
 
+test_10k_roundtrip :: proc() {
+	h := amps.hub_init()
+	defer amps.hub_destroy(&h)
+	amps.start_dispatch(&h)
+
+	ch, _ := amps.subscribe(&h, "sensor.*", filter="", buf_size=10000)
+	defer amps.unsubscribe(&h, 1)
+
+	total := 0
+	for i := 0; i < 10000; i += 1 {
+		topic := "sensor.temp"
+		if (i & 1) != 0 {
+			topic = "sensor.humidity"
+		}
+		body := []byte{u8(i), u8(i >> 8)}
+		ok := amps.publish(&h, amps.Message{topic = topic, body = body})
+		if ok do total += 1
+	}
+
+	received := 0
+	for received < total {
+		_, ok := chan.try_recv(ch)
+		if ok do received += 1
+	}
+
+	if received == total && total == 10000 {
+		fmt.println("PASS 10k roundtrip")
+	} else {
+		fmt.println("FAIL 10k roundtrip:", received, total)
+	}
+}
+
 main :: proc() {
 	test_exact_routing()
 	test_wildcard_routing()
 	test_non_match()
 	test_filter_routing()
 	test_replay_buffer()
+	test_10k_roundtrip()
 	fmt.println("done")
 }
