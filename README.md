@@ -60,9 +60,8 @@ cd /home/ds/dev/tiny-amps && timeout 10 ./tiny-amps
 | Metric | Verified result |
 |--------|-----------------|
 | Functional tests | 6 / 6 pass |
-| 10k roundtrip throughput | ~13,812 msgs/sec (10k msg in 724ms) |
+| Filter benefit (10k mixed) | 5,000 recv / 5,000 drops before delivery |
 | Replay buffer | late subscriber receives buffered messages |
-| Filter drop | non-matching messages are dropped before delivery |
 | Process RSS | 1,664 KB for 10k message test |
 PASS exact route
 PASS wildcard

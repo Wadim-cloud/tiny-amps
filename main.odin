@@ -227,6 +227,70 @@ test_perf :: proc() {
 	}
 }
 
+test_filter_benefit :: proc() {
+	N := 10000
+	h := amps.hub_init()
+	defer amps.hub_destroy(&h)
+	amps.start_dispatch(&h)
+
+	ch, _ := amps.subscribe(&h, "sensor.*", filter="", buf_size=10000)
+	defer amps.unsubscribe(&h, 1)
+
+	total := 0
+	for i := 0; i < N; i += 1 {
+		topic := "sensor.temp"
+		if (i & 1) != 0 {
+			topic = "sensor.humidity"
+		}
+		body := []byte{u8(i), u8(i >> 8)}
+		ok := amps.publish(&h, amps.Message{topic = topic, body = body})
+		if ok do total += 1
+	}
+
+	received := 0
+	for received < total {
+		_, ok := chan.try_recv(ch)
+		if ok do received += 1
+	}
+
+	_, _, fdrops_unfiltered := amps.stats(&h)
+	if received == total && fdrops_unfiltered == 0 {
+		fmt.printf("PASS no_filter: %d sent, %d received, 0 filter drops\n", total, received)
+	} else {
+		fmt.printf("FAIL no_filter: %d received, %d fdrops\n", received, fdrops_unfiltered)
+	}
+
+	h = amps.hub_init()
+	amps.start_dispatch(&h)
+	ch, _ = amps.subscribe(&h, "sensor.*", filter="topic = \"sensor.temp\"", buf_size=10000)
+	defer amps.unsubscribe(&h, 1)
+
+	total = 0
+	for i := 0; i < N; i += 1 {
+		topic := "sensor.temp"
+		if (i & 1) != 0 {
+			topic = "sensor.humidity"
+		}
+		body := []byte{u8(i), u8(i >> 8)}
+		ok := amps.publish(&h, amps.Message{topic = topic, body = body})
+		if ok do total += 1
+	}
+
+	received = 0
+	for received < total {
+		_, ok := chan.try_recv(ch)
+		if ok do received += 1
+	}
+
+	_, _, fdrops_filtered := amps.stats(&h)
+	expected_recv := u64(N) / 2
+	if u64(received) == expected_recv && fdrops_filtered == expected_recv {
+		fmt.printf("PASS filter: %d sent, %d received, %d filter drops\n", total, received, fdrops_filtered)
+	} else {
+		fmt.printf("FAIL filter: got %d received, %d fdrops, want %d recv + %d drops\n", received, fdrops_filtered, expected_recv, expected_recv)
+	}
+}
+
 main :: proc() {
 	test_exact_routing()
 	test_wildcard_routing()
@@ -235,5 +299,6 @@ main :: proc() {
 	test_replay_buffer()
 	test_10k_roundtrip()
 	test_perf()
+	test_filter_benefit()
 	fmt.println("done")
 }
