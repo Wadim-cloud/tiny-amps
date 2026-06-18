@@ -32,50 +32,172 @@ Subscription :: struct {
 }
 
 filter_match :: proc(filter: string, msg: Message) -> bool {
-    if strings.has_prefix(filter, "topic = ") {
-        topic := filter[len("topic = "):]
+    f := strings.trim_space(filter)
+    if f == "" do return true
+
+    if strings.has_prefix(f, "AND(") && strings.has_suffix(f, ")") {
+        inner := f[4:len(f)-1]
+        parts := split_filter_clauses(inner)
+        for p in parts {
+            if !filter_match(p, msg) do return false
+        }
+        return true
+    }
+    if strings.has_prefix(f, "OR(") && strings.has_suffix(f, ")") {
+        inner := f[3:len(f)-1]
+        parts := split_filter_clauses(inner)
+        for p in parts {
+            if filter_match(p, msg) do return true
+        }
+        return false
+    }
+    if strings.has_prefix(f, "NOT(") && strings.has_suffix(f, ")") {
+        inner := f[4:len(f)-1]
+        return !filter_match(inner, msg)
+    }
+
+    if strings.has_prefix(f, "topic = ") {
+        topic := f[len("topic = "):]
         if strings.has_prefix(topic, "\"") && strings.has_suffix(topic, "\"") {
             topic = topic[1:len(topic)-1]
         }
         return msg.topic == topic
     }
-    if strings.has_prefix(filter, "topic != ") {
-        topic := filter[len("topic != "):]
+    if strings.has_prefix(f, "topic != ") {
+        topic := f[len("topic != "):]
         if strings.has_prefix(topic, "\"") && strings.has_suffix(topic, "\"") {
             topic = topic[1:len(topic)-1]
         }
         return msg.topic != topic
     }
-    
-    parts, _ := strings.split(filter, " = ", context.allocator)
-    if len(parts) == 2 {
-        field := strings.trim(parts[0], " ")
+
+    seps := []string{" = ", " != ", " > ", " < ", " >= ", " <= "}
+    for i := 0; i < len(seps); i += 1 {
+        sep := seps[i]
+        idx := strings.index(f, sep)
+        if idx < 0 do continue
+        field := strings.trim_space(f[:idx])
+        raw := strings.trim_space(f[idx+len(sep):])
         if field == "topic" {
-            val := strings.trim(parts[1], " ")
+            val := raw
             if strings.has_prefix(val, "\"") && strings.has_suffix(val, "\"") {
                 val = val[1:len(val)-1]
             }
-            return msg.topic == val
-        }
-    }
-    
-    parts2, _ := strings.split(filter, " != ", context.allocator)
-    if len(parts2) == 2 {
-        field := strings.trim(parts2[0], " ")
-        if field == "topic" {
-            val := strings.trim(parts2[1], " ")
-            if strings.has_prefix(val, "\"") && strings.has_suffix(val, "\"") {
-                val = val[1:len(val)-1]
+            switch sep {
+            case " = ": return msg.topic == val
+            case " != ": return msg.topic != val
             }
-            return msg.topic != val
+            continue
+        }
+
+        msg_val := parse_body_number(msg.body, field)
+        target := parse_number(raw)
+        switch sep {
+        case " = ": return msg_val == target
+        case " != ": return msg_val != target
+        case " > ": return msg_val > target
+        case " < ": return msg_val < target
+        case " >= ": return msg_val >= target
+        case " <= ": return msg_val <= target
         }
     }
-    
-    if filter != "" {
+
+    if f != "" {
         msg_str := string(msg.body)
-        return strings.contains(msg_str, filter)
+        return strings.contains(msg_str, f)
     }
     return true
+}
+
+parse_body_number :: proc(body: []byte, field: string) -> f64 {
+    if len(body) == 0 do return 0
+    text := string(body)
+    parts, _ := strings.split(text, " ")
+    for part in parts {
+        kv, _ := strings.split(part, "=")
+        if len(kv) == 2 && strings.trim_space(kv[0]) == field {
+            v := strings.trim_space(kv[1])
+            n := 0.0
+            sign := 1.0
+            i := 0
+            if i < len(v) && v[i] == '-' {
+                sign = -1
+                i += 1
+            }
+            for i < len(v) {
+                c := v[i]
+                if c >= '0' && c <= '9' {
+                    n = n * 10 + f64(c - '0')
+                } else if c == '.' {
+                    j := i + 1
+                    frac := 0.1
+                    for j < len(v) && v[j] >= '0' && v[j] <= '9' {
+                        n += f64(v[j] - '0') * frac
+                        frac *= 0.1
+                        j += 1
+                    }
+                    i = j
+                    break
+                } else {
+                    return 0
+                }
+                i += 1
+            }
+            return n * sign
+        }
+    }
+    return 0
+}
+
+parse_number :: proc(s: string) -> f64 {
+    n := 0.0
+    sign := 1.0
+    i := 0
+    if i < len(s) && s[i] == '-' {
+        sign = -1
+        i += 1
+    }
+    for i < len(s) {
+        c := s[i]
+        if c >= '0' && c <= '9' {
+            n = n * 10 + f64(c - '0')
+        } else if c == '.' {
+            j := i + 1
+            frac := 0.1
+            for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+                n += f64(s[j] - '0') * frac
+                frac *= 0.1
+                j += 1
+            }
+            i = j
+            break
+        } else {
+            return 0
+        }
+        i += 1
+    }
+    return n * sign
+}
+
+split_filter_clauses :: proc(filter: string) -> [dynamic]string {
+    out := make([dynamic]string, 0, 4)
+    depth := 0
+    start := 0
+    for i := 0; i < len(filter); i += 1 {
+        c := filter[i]
+        if c == '(' {
+            depth += 1
+        } else if c == ')' {
+            if depth > 0 do depth -= 1
+        } else if c == ',' && depth == 0 {
+            clause := strings.trim_space(filter[start:i])
+            if clause != "" do append(&out, clause)
+            start = i + 1
+        }
+    }
+    clause := strings.trim_space(filter[start:])
+    if clause != "" do append(&out, clause)
+    return out
 }
 
 Subscriber_ID :: u32
