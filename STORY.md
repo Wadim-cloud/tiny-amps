@@ -90,4 +90,4 @@ That’s what this project is about.
 
 ---
 
-*Karl Zylinski — gemmaro/powers*
+*Wadim Seminsky — gemmaro/powers*
