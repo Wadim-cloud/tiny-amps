@@ -46,7 +46,7 @@ test_swarmsim_ab :: proc() {
 		return
 	}
 
-	sent_f, recv_f, drops_f, fdrops_f := run_scenario("topic = \"agent.0\"")
+	_, recv_f, drops_f, fdrops_f := run_scenario("topic = \"agent.0\"")
 	want_filter_recv := want_no_filter / NUM_AGENTS
 	if recv_f == want_filter_recv && fdrops_f == u64(want_no_filter - want_filter_recv) {
 		fmt.printf("PASS swarmsim A/B: no-filter=%d recv, filter=%d recv, filter_drops=%d\n",
