@@ -6,6 +6,12 @@ import "core:sync"
 import "core:sync/chan"
 import "core:thread"
 
+AMPS_OK :: 0
+AMPS_ERR_NULL_HANDLE :: 1
+AMPS_ERR_NULL_TOPIC :: 2
+AMPS_ERR_FULL :: 3
+AMPS_ERR_CLOSED :: 4
+
 amps_init :: proc() -> rawptr {
     h := new(Hub)
     h^ = hub_init()
@@ -18,9 +24,11 @@ amps_close :: proc(h: rawptr) {
     hub_destroy(cast(^Hub)h)
 }
 
-amps_publish :: proc(h: rawptr, topic: cstring, body: []u8) -> bool {
-    if h == nil || topic == nil do return false
-    return publish(cast(^Hub)h, Message{topic = string(topic), body = body})
+amps_publish :: proc(h: rawptr, topic: cstring, body: []u8) -> int {
+    if h == nil do return AMPS_ERR_NULL_HANDLE
+    if topic == nil do return AMPS_ERR_NULL_TOPIC
+    if !publish(cast(^Hub)h, Message{topic = string(topic), body = body}) do return AMPS_ERR_FULL
+    return AMPS_OK
 }
 
 amps_subscribe :: proc(h: rawptr, topic: cstring, filter: cstring, buf_size: int) -> u32 {
